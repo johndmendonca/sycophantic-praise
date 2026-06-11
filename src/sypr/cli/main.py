@@ -249,11 +249,11 @@ def build_artifacts_cmd(
 def generate_cmd(
     input_path: str = typer.Argument("data/interim/benchmark_instances.jsonl"),
     output_path: str = typer.Argument("data/interim/model_responses.jsonl"),
-    provider: str = typer.Option(..., help="Model provider: openai, azure, anthropic_foundry, or huggingface"),
+    provider: str = typer.Option(..., help="Model provider: openai, azure, anthropic_foundry, huggingface, or litellm"),
     model_name: str = typer.Option(..., help="Model or deployment name"),
     temperature: float = typer.Option(0.0),
     max_tokens: int = typer.Option(512),
-    azure_base_url: str | None = typer.Option(None),
+    azure_base_url: str | None = typer.Option(None, help="Azure endpoint or LiteLLM api_base (e.g. http://localhost:8000 for vLLM)"),
     max_examples: int | None = typer.Option(None, help="Optional cap for smoke tests"),
     readable_output_path: str | None = typer.Option(None, help="Human-readable JSON sidecar path"),
     max_workers: int = typer.Option(1, help="Parallel API calls"),
@@ -262,6 +262,7 @@ def generate_cmd(
     retry_max_delay: float = typer.Option(30.0),
     device_map: str = typer.Option("auto", help="Hugging Face only"),
     torch_dtype: str = typer.Option("auto", help="Hugging Face only"),
+    system_prompt: str | None = typer.Option(None, help="Override the default system prompt for the model under evaluation"),
 ) -> None:
     rows = read_jsonl(input_path)
     if max_examples is not None:
@@ -281,6 +282,7 @@ def generate_cmd(
         retry_initial_delay=retry_initial_delay,
         retry_max_delay=retry_max_delay,
         runtime_save_path=output_path,
+        system_prompt=system_prompt or None,
     )
     write_jsonl(output_path, [response.model_dump(mode="json") for response in responses])
     readable_path = readable_output_path or _default_readable_output_path(output_path)
@@ -293,11 +295,11 @@ def generate_cmd(
 def generate_artifact_responses_cmd(
     input_path: str = typer.Argument("data/interim/benchmark_artifacts.jsonl"),
     output_path: str = typer.Argument("data/interim/benchmark_artifacts_with_responses.jsonl"),
-    provider: str = typer.Option(..., help="Model provider: openai, azure, anthropic_foundry, or huggingface"),
+    provider: str = typer.Option(..., help="Model provider: openai, azure, anthropic_foundry, huggingface, or litellm"),
     model_name: str = typer.Option(..., help="Model or deployment name"),
     temperature: float = typer.Option(0.0),
     max_tokens: int = typer.Option(512),
-    azure_base_url: str | None = typer.Option(None),
+    azure_base_url: str | None = typer.Option(None, help="Azure endpoint or LiteLLM api_base (e.g. http://localhost:8000 for vLLM)"),
     device_map: str = typer.Option("auto", help="Hugging Face only"),
     torch_dtype: str = typer.Option("auto", help="Hugging Face only"),
     overwrite_existing: bool = typer.Option(False),
@@ -308,6 +310,7 @@ def generate_artifact_responses_cmd(
     retry_attempts: int = typer.Option(4),
     retry_initial_delay: float = typer.Option(1.0),
     retry_max_delay: float = typer.Option(30.0),
+    system_prompt: str | None = typer.Option(None, help="Override the default system prompt for the model under evaluation"),
 ) -> None:
     artifacts = read_artifacts(input_path)
     if max_examples is not None:
@@ -328,6 +331,7 @@ def generate_artifact_responses_cmd(
         retry_max_delay=retry_max_delay,
         runtime_save_path=output_path,
         skip_existing=not overwrite_existing,
+        system_prompt=system_prompt or None,
     )
     write_artifacts(output_path, generated)
     readable_path = readable_output_path or _default_readable_output_path(output_path)
@@ -363,7 +367,7 @@ def judge_cmd(
     judge_setup_name: str | None = typer.Option(None),
     exemplars_path: str | None = typer.Option(None),
     exemplar_scale: int | None = typer.Option(None),
-    azure_base_url: str | None = typer.Option(None),
+    azure_base_url: str | None = typer.Option(None, help="Azure endpoint or LiteLLM api_base (e.g. http://localhost:8000 for vLLM)"),
     overwrite_existing: bool = typer.Option(False),
     max_workers: int = typer.Option(1),
     request_timeout: float | None = typer.Option(60.0),

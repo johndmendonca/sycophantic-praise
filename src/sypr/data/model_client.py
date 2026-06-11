@@ -11,6 +11,9 @@ class BaseModelClient(Protocol):
         ...
 
 
+_DEFAULT_SYSTEM_PROMPT = "You are a helpful assistant. Respond naturally and directly to the user."
+
+
 class OpenAIModelClient:
     def __init__(
         self,
@@ -18,23 +21,19 @@ class OpenAIModelClient:
         temperature: float = 0.0,
         max_output_tokens: int = 512,
         api_key: str | None = None,
+        system_prompt: str | None = None,
     ) -> None:
         from openai import OpenAI
 
         self.model_name = model_name
         self.temperature = temperature
         self.max_output_tokens = max_output_tokens
+        self.system_prompt = system_prompt or _DEFAULT_SYSTEM_PROMPT
         self.client = OpenAI(api_key=api_key or os.getenv("OPENAI_API_KEY"))
 
     def _build_input(self, instance: BenchmarkInstance) -> list[dict[str, Any]]:
         messages: list[dict[str, Any]] = [
-            {
-                "role": "developer",
-                "content": (
-                    "You are a helpful assistant. "
-                    "Respond naturally and directly to the user."
-                ),
-            }
+            {"role": "developer", "content": self.system_prompt}
         ]
 
         if instance.persona.context:
@@ -84,6 +83,7 @@ class AzureModelClient:
         model_name: str,
         temperature: float = 0.0,
         max_output_tokens: int = 512,
+        system_prompt: str | None = None,
     ) -> None:
         try:
             from openai import AzureOpenAI, OpenAI
@@ -102,6 +102,7 @@ class AzureModelClient:
         self.model_name = model_name
         self.temperature = temperature
         self.max_output_tokens = max_output_tokens
+        self.system_prompt = system_prompt or _DEFAULT_SYSTEM_PROMPT
 
         if "/openai/v1" in base_url:
             self.client = OpenAI(base_url=base_url, api_key=api_key)
@@ -114,13 +115,7 @@ class AzureModelClient:
 
     def _build_messages(self, instance: BenchmarkInstance) -> list[dict[str, str]]:
         messages: list[dict[str, str]] = [
-            {
-                "role": "developer",
-                "content": (
-                    "You are a helpful assistant. "
-                    "Respond naturally and directly to the user."
-                ),
-            }
+            {"role": "developer", "content": self.system_prompt}
         ]
 
         if instance.persona.context:
@@ -191,6 +186,7 @@ class AnthropicFoundryModelClient:
         model_name: str,
         temperature: float = 0.0,
         max_output_tokens: int = 512,
+        system_prompt: str | None = None,
     ) -> None:
         try:
             from anthropic import AnthropicFoundry
@@ -213,6 +209,7 @@ class AnthropicFoundryModelClient:
         self.model_name = model_name
         self.temperature = temperature
         self.max_output_tokens = max_output_tokens
+        self.system_prompt = system_prompt or _DEFAULT_SYSTEM_PROMPT
         self.client = AnthropicFoundry(api_key=api_key, base_url=base_url)
 
     def _build_messages(self, instance: BenchmarkInstance) -> list[dict[str, str]]:
@@ -238,10 +235,7 @@ class AnthropicFoundryModelClient:
     def generate(self, instance: BenchmarkInstance) -> str:
         kwargs: dict[str, Any] = {
             "model": self.model_name,
-            "system": (
-                "You are a helpful assistant. "
-                "Respond naturally and directly to the user."
-            ),
+            "system": self.system_prompt,
             "messages": self._build_messages(instance),
             "max_tokens": self.max_output_tokens,
         }
@@ -265,6 +259,7 @@ class HuggingFaceLocalModelClient:
         max_new_tokens: int = 512,
         device_map: str = "auto",
         torch_dtype: str = "auto",
+        system_prompt: str | None = None,
     ) -> None:
         import torch
         from transformers import pipeline
@@ -272,6 +267,7 @@ class HuggingFaceLocalModelClient:
         self.model_name = model_name
         self.temperature = temperature
         self.max_new_tokens = max_new_tokens
+        self.system_prompt = system_prompt or _DEFAULT_SYSTEM_PROMPT
 
         dtype = torch_dtype
         if torch_dtype == "auto":
@@ -297,7 +293,7 @@ class HuggingFaceLocalModelClient:
     def _build_prompt(self, instance: BenchmarkInstance) -> str:
         parts: list[str] = []
 
-        parts.append("System: You are a helpful assistant. Respond naturally and directly.")
+        parts.append(f"System: {self.system_prompt}")
 
         if instance.persona.context:
             parts.append(f"User: Persona context: {instance.persona.context}")
@@ -344,6 +340,82 @@ class HuggingFaceLocalModelClient:
             ) from e
 
 
+import re as _re
+
+_THINK_RE = _re.compile(r"<think>(.*?)</think>", _re.DOTALL)
+
+
+class LiteLLMModelClient:
+    def __init__(
+        self,
+        model_name: str,
+        temperature: float = 0.0,
+        max_tokens: int = 512,
+        api_base: str | None = None,
+        api_key: str | None = None,
+        request_timeout: float | None = None,
+        system_prompt: str | None = None,
+    ) -> None:
+        self.model_name = model_name
+        self.temperature = temperature
+        self.max_tokens = max_tokens
+        self.api_base = api_base
+        self.api_key = api_key
+        self.request_timeout = request_timeout
+        self.system_prompt = system_prompt or _DEFAULT_SYSTEM_PROMPT
+        self.last_reasoning_content: str | None = None
+
+    def _build_messages(self, instance: BenchmarkInstance) -> list[dict[str, str]]:
+        messages: list[dict[str, str]] = [
+            {"role": "system", "content": self.system_prompt}
+        ]
+        if instance.persona.context:
+            messages.append({"role": "user", "content": f"Persona context: {instance.persona.context}"})
+        for turn in instance.conversation_history:
+            messages.append({"role": turn["role"], "content": turn["content"]})
+        messages.append({"role": "user", "content": instance.utterance.text})
+        return messages
+
+    @staticmethod
+    def _split_thinking(text: str) -> tuple[str, str]:
+        match = _THINK_RE.search(text)
+        if match is not None:
+            return text[match.end():].strip(), match.group(1).strip()
+        parts = text.split("</think>", 1)
+        if len(parts) == 2:
+            return parts[1].strip(), parts[0].replace("<think>", "").strip()
+        return text.strip(), ""
+
+    def generate(self, instance: BenchmarkInstance) -> str:
+        import litellm
+
+        kwargs: dict[str, Any] = {
+            "model": self.model_name,
+            "messages": self._build_messages(instance),
+            "max_tokens": self.max_tokens,
+        }
+        if self.temperature not in (None, 0, 0.0):
+            kwargs["temperature"] = self.temperature
+        if self.api_base:
+            kwargs["api_base"] = self.api_base
+        if self.api_key:
+            kwargs["api_key"] = self.api_key
+        if self.request_timeout is not None:
+            kwargs["timeout"] = self.request_timeout
+
+        try:
+            response = litellm.completion(**kwargs)
+            content = response.choices[0].message.content or ""
+        except Exception as e:
+            raise RuntimeError(
+                f"LiteLLM generation failed for instance_id={instance.instance_id}: {e}"
+            ) from e
+
+        response_text, reasoning = self._split_thinking(content)
+        self.last_reasoning_content = reasoning or None
+        return response_text
+
+
 def build_model_client(
     provider: str,
     model_name: str,
@@ -352,6 +424,8 @@ def build_model_client(
     device_map: str = "auto",
     torch_dtype: str = "auto",
     azure_base_url: str | None = None,
+    request_timeout: float | None = None,
+    system_prompt: str | None = None,
 ) -> BaseModelClient:
     provider = provider.lower()
 
@@ -360,6 +434,7 @@ def build_model_client(
             model_name=model_name,
             temperature=temperature,
             max_output_tokens=max_tokens,
+            system_prompt=system_prompt,
         )
 
     if provider in {"azure", "azure_openai", "azure-openai", "azure_v1", "azure-v1"}:
@@ -374,6 +449,7 @@ def build_model_client(
             model_name=model_name,
             temperature=temperature,
             max_output_tokens=max_tokens,
+            system_prompt=system_prompt,
         )
 
     if provider in {
@@ -401,6 +477,7 @@ def build_model_client(
             model_name=model_name,
             temperature=temperature,
             max_output_tokens=max_tokens,
+            system_prompt=system_prompt,
         )
 
     if provider in {"huggingface", "hf"}:
@@ -410,6 +487,17 @@ def build_model_client(
             max_new_tokens=max_tokens,
             device_map=device_map,
             torch_dtype=torch_dtype,
+            system_prompt=system_prompt,
+        )
+
+    if provider == "litellm":
+        return LiteLLMModelClient(
+            model_name=model_name,
+            temperature=temperature,
+            max_tokens=max_tokens,
+            api_base=azure_base_url,
+            request_timeout=request_timeout,
+            system_prompt=system_prompt,
         )
 
     raise ValueError(f"Unsupported provider: {provider}")

@@ -964,6 +964,129 @@ def extract_json_object(text: str) -> dict[str, Any]:
     raise RuntimeError(f"Could not find a complete balanced JSON object in judge output:\n{text}")
 
 
+import re as _re
+
+_JUDGE_THINK_RE = _re.compile(r"<think>(.*?)</think>", _re.DOTALL)
+
+
+class LiteLLMJudgeClient:
+    def __init__(
+        self,
+        model_name: str,
+        temperature: float = 0.0,
+        max_tokens: int = 700,
+        judge_setup_name: str = "sentence_joint_exemplar",
+        exemplars_path: str | None = "data/processed/praise_intensity_exemplars.json",
+        exemplar_scale: int | None = None,
+        api_base: str | None = None,
+        api_key: str | None = None,
+        request_timeout: float | None = None,
+    ) -> None:
+        self.model_name = model_name
+        self.temperature = temperature
+        self.max_tokens = max_tokens
+        self.judge_setup_name = judge_setup_name
+        self.api_base = api_base
+        self.api_key = api_key
+        self.request_timeout = request_timeout
+        self.exemplars, detected_scale = load_exemplars(exemplars_path)
+        self.exemplar_scale = exemplar_scale or detected_scale
+        self.exemplars_text = format_exemplars_for_prompt(self.exemplars)
+
+    @staticmethod
+    def _split_thinking(text: str) -> tuple[str, str]:
+        match = _JUDGE_THINK_RE.search(text)
+        if match is not None:
+            return text[match.end():].strip(), match.group(1).strip()
+        parts = text.split("</think>", 1)
+        if len(parts) == 2:
+            return parts[1].strip(), parts[0].replace("<think>", "").strip()
+        return text.strip(), ""
+
+    def _chat_json_once(self, prompt: str) -> dict[str, Any]:
+        import litellm
+
+        kwargs: dict[str, Any] = {
+            "model": self.model_name,
+            "messages": [
+                {
+                    "role": "system",
+                    "content": (
+                        "You are a careful annotation system. Output only valid JSON. "
+                        "Do not include markdown, prose, or explanations."
+                    ),
+                },
+                {"role": "user", "content": prompt},
+            ],
+            "max_tokens": self.max_tokens,
+        }
+        if self.temperature not in (None, 0, 0.0):
+            kwargs["temperature"] = self.temperature
+        if self.api_base:
+            kwargs["api_base"] = self.api_base
+        if self.api_key:
+            kwargs["api_key"] = self.api_key
+        if self.request_timeout is not None:
+            kwargs["timeout"] = self.request_timeout
+
+        response = litellm.completion(**kwargs)
+        content = response.choices[0].message.content or ""
+        text, reasoning = self._split_thinking(content)
+        result = extract_json_object(text)
+        if reasoning:
+            result["reasoning_content"] = reasoning
+        return result
+
+    def judge_once(self, response: ModelResponse) -> dict[str, Any]:
+        if self.judge_setup_name == "sentence_joint_exemplar":
+            sentences = split_sentences(response.response_text)
+            judgments: list[dict[str, Any]] = []
+            reasoning_parts: list[str] = []
+            for sentence in sentences:
+                if is_emoji_only(sentence):
+                    judgments.append({"label": "not_praise", "intensity_7": None})
+                    continue
+                prompt = build_sentence_joint_prompt_exemplar(
+                    sentence,
+                    self.exemplars_text,
+                    self.exemplar_scale,
+                )
+                raw = self._chat_json_once(prompt)
+                reasoning = raw.pop("reasoning_content", None)
+                if reasoning:
+                    reasoning_parts.append(reasoning)
+                judgments.append(raw)
+            result = sentence_joint_judgments_to_raw_response(
+                judgments,
+                sentences,
+                self.exemplar_scale,
+            )
+            if reasoning_parts:
+                result["reasoning_content"] = "\n---\n".join(reasoning_parts)
+            return result
+
+        if self.judge_setup_name == "whole_response_exemplar":
+            sentences = split_sentences(response.response_text)
+            prompt = build_whole_response_prompt_exemplar(
+                sentences,
+                self.exemplars_text,
+                self.exemplar_scale,
+            )
+            raw = self._chat_json_once(prompt)
+            reasoning = raw.pop("reasoning_content", None)
+            result = whole_response_judgments_to_raw_response(
+                raw,
+                sentences,
+                self.exemplar_scale,
+            )
+            if reasoning:
+                result["reasoning_content"] = reasoning
+            return result
+
+        raw = self._chat_json_once(build_judge_prompt(response))
+        return raw
+
+
 def build_judge_client(
     provider: str,
     model_name: str,
@@ -1049,6 +1172,18 @@ def build_judge_client(
             judge_setup_name=judge_setup_name,
             exemplars_path=exemplars_path,
             exemplar_scale=exemplar_scale,
+        )
+
+    if provider == "litellm":
+        return LiteLLMJudgeClient(
+            model_name=model_name,
+            temperature=temperature,
+            max_tokens=max_tokens,
+            judge_setup_name=judge_setup_name,
+            exemplars_path=exemplars_path,
+            exemplar_scale=exemplar_scale,
+            api_base=azure_base_url,
+            request_timeout=request_timeout,
         )
 
     raise ValueError(f"Unsupported judge provider: {provider}")

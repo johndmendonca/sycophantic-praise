@@ -1,0 +1,9 @@
+provider: litellm
+model_name: hosted_vllm/Qwen/Qwen3-30B-A3B-Instruct
+temperature: 0.0
+max_tokens: 700
+n_calls: 1
+aggregation: none
+judge_setup_name: sentence_joint_exemplar
+# Set to a local path if you have the exemplars file; null disables exemplar-augmented prompts
+exemplars_path: null

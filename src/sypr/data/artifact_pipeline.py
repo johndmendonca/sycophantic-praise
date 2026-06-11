@@ -5,6 +5,17 @@ import json
 import threading
 from pathlib import Path
 
+try:
+    from tqdm import tqdm
+except ImportError:  # pragma: no cover - tqdm is optional at runtime.
+    tqdm = None
+
+
+def _progress(iterable, *, desc: str, total: int | None = None):
+    if tqdm is None:
+        return iterable
+    return tqdm(iterable, desc=desc, total=total)
+
 from sypr.data.generate import (
     generate_response_for_instance_with_retries,
     model_response_from_text,
@@ -65,6 +76,7 @@ def generate_responses_for_artifacts(
     retry_max_delay: float = 30.0,
     runtime_save_path: str | Path | None = None,
     skip_existing: bool = True,
+    system_prompt: str | None = None,
 ) -> list[BenchmarkArtifact]:
     existing_by_artifact_id = read_existing_artifacts_by_id(runtime_save_path) if runtime_save_path else {}
     written_artifact_ids = set(existing_by_artifact_id)
@@ -106,6 +118,7 @@ def generate_responses_for_artifacts(
         device_map=device_map,
         torch_dtype=torch_dtype,
         azure_base_url=azure_base_url,
+        system_prompt=system_prompt,
     )
 
     def record_artifact(artifact: BenchmarkArtifact) -> None:
@@ -166,13 +179,17 @@ def generate_responses_for_artifacts(
 
     batches = [to_generate[i : i + batch_size] for i in range(0, len(to_generate), batch_size)]
     if max_workers == 1:
-        for batch in batches:
+        for batch in _progress(batches, desc="Generating responses", total=len(batches)):
             for idx, artifact in generate_batch(batch):
                 generated[idx] = artifact
     else:
         with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as executor:
             futures = [executor.submit(generate_batch, batch) for batch in batches]
-            for future in concurrent.futures.as_completed(futures):
+            for future in _progress(
+                concurrent.futures.as_completed(futures),
+                desc="Generating responses",
+                total=len(futures),
+            ):
                 for idx, artifact in future.result():
                     generated[idx] = artifact
 

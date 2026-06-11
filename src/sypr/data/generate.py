@@ -15,6 +15,17 @@ from sypr.schemas import BenchmarkInstance, GenerationConfig, ModelResponse, Res
 
 T = TypeVar("T")
 
+try:
+    from tqdm import tqdm
+except ImportError:  # pragma: no cover - tqdm is optional at runtime.
+    tqdm = None
+
+
+def _progress(iterable, *, desc: str, total: int | None = None):
+    if tqdm is None:
+        return iterable
+    return tqdm(iterable, desc=desc, total=total)
+
 
 def _sleep_before_retry(
     *,
@@ -87,8 +98,10 @@ def generate_response_for_instance(
     device_map: str = "auto",
     torch_dtype: str = "auto",
     response_index: int = 0,
+    system_prompt: str | None = None,
 ) -> ModelResponse:
     response_text = client.generate(instance)
+    reasoning_content = getattr(client, "last_reasoning_content", None)
     return model_response_from_text(
         instance=instance,
         response_text=response_text,
@@ -99,6 +112,7 @@ def generate_response_for_instance(
         device_map=device_map,
         torch_dtype=torch_dtype,
         response_index=response_index,
+        reasoning_content=reasoning_content,
     )
 
 
@@ -113,6 +127,7 @@ def model_response_from_text(
     device_map: str = "auto",
     torch_dtype: str = "auto",
     response_index: int = 0,
+    reasoning_content: str | None = None,
 ) -> ModelResponse:
     config = generation_config(
         provider=provider,
@@ -133,6 +148,16 @@ def model_response_from_text(
             "response_index": response_index,
         },
     )
+    response_meta: dict = {"response_index": response_index}
+    if reasoning_content:
+        response_meta["reasoning_content"] = reasoning_content
+    top_meta: dict = {
+        "provider": provider,
+        "response_index": response_index,
+        "context_length_bucket": instance.context_metadata.context_length_bucket,
+    }
+    if reasoning_content:
+        top_meta["reasoning_content"] = reasoning_content
     return ModelResponse(
         instance_id=instance.instance_id,
         response_id=response_id,
@@ -148,13 +173,9 @@ def model_response_from_text(
             response_length_chars=len(response_text),
             response_length_tokens=len(response_text.split()),
             generation_config=config.model_dump(mode="json"),
-            metadata={"response_index": response_index},
+            metadata=response_meta,
         ),
-        metadata={
-            "provider": provider,
-            "response_index": response_index,
-            "context_length_bucket": instance.context_metadata.context_length_bucket,
-        },
+        metadata=top_meta,
     )
 
 
@@ -187,6 +208,7 @@ def generate_responses(
     retry_initial_delay: float = 1.0,
     retry_max_delay: float = 30.0,
     runtime_save_path: str | Path | None = None,
+    system_prompt: str | None = None,
 ) -> list[ModelResponse]:
     existing_by_instance_id: dict[str, ModelResponse] = {}
     written_instance_ids: set[str] = set()
@@ -218,6 +240,7 @@ def generate_responses(
         device_map=device_map,
         torch_dtype=torch_dtype,
         azure_base_url=azure_base_url,
+        system_prompt=system_prompt,
     )
 
     def record_response(response: ModelResponse) -> None:
@@ -248,7 +271,7 @@ def generate_responses(
         return idx, response
 
     if max_workers == 1:
-        for idx, instance in to_generate:
+        for idx, instance in _progress(to_generate, desc="Generating responses", total=len(to_generate)):
             result_idx, response = generate_one(idx, instance)
             responses[result_idx] = response
         return [response for response in responses if response is not None]
@@ -258,7 +281,11 @@ def generate_responses(
             executor.submit(generate_one, idx, instance): idx
             for idx, instance in to_generate
         }
-        for future in concurrent.futures.as_completed(futures):
+        for future in _progress(
+            concurrent.futures.as_completed(futures),
+            desc="Generating responses",
+            total=len(futures),
+        ):
             result_idx, response = future.result()
             responses[result_idx] = response
 

@@ -177,6 +177,7 @@ class JudgeConfig(FrozenSchemaModel):
         "azure-anthropic",
         "claude_foundry",
         "claude-foundry",
+        "litellm",
     ] = "huggingface"
     model_name: str = "Qwen/Qwen3-30B-A3B-Instruct-2507"
     temperature: float = 0.0
