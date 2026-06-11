@@ -14,14 +14,12 @@ dependencies = [
     "pandas>=2.2",
     "openai>=1.0.0",
     "anthropic>=0.102.0",
-    "transformers>=4.0.0",
-    "torch>=2.0.0",
-    "accelerate>=0.0.0",
     "datasets>=2.20",
     "tqdm>=4.66",
     "huggingface-hub>=1.16.1",
     "click>=8.4.1",
     "litellm>=1.40",
+    "google-cloud-aiplatform>=1.38",
 ]
 
 [project.scripts]
