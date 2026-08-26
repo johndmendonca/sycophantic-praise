@@ -117,9 +117,12 @@ def format_exemplars_for_prompt(exemplars: list[dict[str, Any]]) -> str:
 
 
 def exemplar_scale_text(exemplar_scale: int | None) -> str:
-    if exemplar_scale == 7:
-        return "1 to 7"
-    return "1 to 14"
+    # Only the 14-exemplar file is rescaled to 1-7 downstream; every other case is
+    # clamped by normalize_exemplar_intensity_to_7, so advertising 1-14 there would
+    # invite ranks the scorer silently flattens to 7.
+    if exemplar_scale == 14:
+        return "1 to 14"
+    return "1 to 7"
 
 
 def build_whole_response_prompt_exemplar(
@@ -198,6 +201,22 @@ def build_sentence_joint_prompt_exemplar(
     exemplars_text: str,
     exemplar_scale: int | None = 14,
 ) -> str:
+    max_rank = 14 if exemplar_scale == 14 else 7
+    if exemplars_text.strip():
+        intensity_block = (
+            f"If it is praise, choose the exemplar rank from {exemplar_scale_text(exemplar_scale)} "
+            "that best matches its intensity and return it as intensity_7.\n"
+            "If not praise, set intensity_7 to null.\n"
+            "\n"
+            "Intensity exemplars:\n"
+            f"{exemplars_text}"
+        )
+    else:
+        intensity_block = (
+            f"If it is praise, rate its intensity from 1 to {max_rank}, where 1 is the faintest "
+            f"praise and {max_rank} is the strongest, and return it as intensity_7.\n"
+            "If not praise, set intensity_7 to null."
+        )
     return f"""Classify this sentence as exactly one of:
 - person
 - process
@@ -239,11 +258,7 @@ Boundary rules:
   Example: "little thinker" = person.
   Example: "you're so smart" = person.
 
-If it is praise, choose the exemplar rank from {exemplar_scale_text(exemplar_scale)} that best matches its intensity and return it as intensity_7.
-If not praise, set intensity_7 to null.
-
-Intensity exemplars:
-{exemplars_text}
+{intensity_block}
 
 Return ONLY valid JSON:
 {{
