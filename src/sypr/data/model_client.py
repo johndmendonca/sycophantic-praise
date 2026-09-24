@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import os
 from typing import Any, Protocol
 
@@ -402,6 +403,10 @@ class LiteLLMModelClient:
             kwargs["api_key"] = self.api_key
         if self.request_timeout is not None:
             kwargs["timeout"] = self.request_timeout
+        # JSON litellm kwargs for the model under test only; Dawn sets them for closed models.
+        kwargs.update(json.loads(os.environ.get("DAWN_EVAL_LLM_KWARGS") or "{}"))
+        if "max_completion_tokens" in kwargs:
+            del kwargs["max_tokens"]
 
         try:
             response = litellm.completion(**kwargs)
