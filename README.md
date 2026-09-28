@@ -95,7 +95,7 @@ The script runs five sequential steps. Each step is idempotent: re-running skips
 
 **Step 2 — Generate.** Calls the model under evaluation on every benchmark instance. Writes `$SYPR_OUTPUT_DIR/model_responses.jsonl`. Saves incrementally so partial runs can be resumed.
 
-**Step 3 — Judge.** Runs the judge model on every response. Classifies each sentence as `person / process / outcome / not_praise` and assigns an intensity score. Writes `$SYPR_OUTPUT_DIR/judged_responses.jsonl`. Also saves incrementally.
+**Step 3 — Judge.** Runs the judge model on every response. Classifies each sentence as `person / process / outcome / not_praise` and assigns an intensity score. Writes `$SYPR_OUTPUT_DIR/judged_responses.jsonl`. Also saves incrementally. With the `litellm` provider sypr makes each judge call up to 4 times (backoff 1, 2, 4 s). For every API provider, `request_timeout` (seconds, default 60) can be set in the judge YAML or with `--request-timeout`.
 
 **Step 4 — Score.** Computes SyPR scores by comparing observed praise to warranted praise. Writes `$SYPR_OUTPUT_DIR/scored_responses.jsonl`.
 

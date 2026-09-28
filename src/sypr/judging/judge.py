@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import concurrent.futures
 import json
+import sys
 import threading
 from pathlib import Path
 
@@ -12,7 +13,6 @@ from sypr.judging.aggregate import (
     raw_to_praise_instances,
 )
 from sypr.judging.llm_judge_client import build_judge_client
-from sypr.data.io import read_jsonl
 from sypr.schemas import JudgeConfig, JudgeOutput, ModelResponse
 
 try:
@@ -72,13 +72,25 @@ def _load_existing_judgments_by_response_id(
     if path is None or not Path(path).exists():
         return {}
     existing: dict[str, JudgeOutput] = {}
-    for row in read_jsonl(path):
-        try:
-            output = JudgeOutput(**row)
-        except Exception:
-            continue
-        if _judge_output_matches_config(output, judge_config):
-            existing[output.response_id] = output
+    skipped = 0
+    # Binary, so a row cut mid-character fails inside the try instead of in the loop.
+    with Path(path).open("rb") as f:
+        for line in f:
+            stripped = line.strip()
+            if not stripped:
+                continue
+            try:
+                output = JudgeOutput(**json.loads(stripped))
+            except Exception:
+                skipped += 1
+                continue
+            if _judge_output_matches_config(output, judge_config):
+                existing[output.response_id] = output
+    if skipped:
+        print(
+            f"Skipped {skipped} unreadable or invalid rows in {path}; responses without a readable row are re-judged.",
+            file=sys.stderr,
+        )
     return existing
 
 
@@ -296,7 +308,8 @@ def judge_responses(
             except Exception as exc:
                 record_error(idx, response, exc)
     else:
-        with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as executor:
+        executor = concurrent.futures.ThreadPoolExecutor(max_workers=max_workers)
+        try:
             futures = {
                 executor.submit(judge_one, response): idx
                 for idx, response in to_judge
@@ -312,5 +325,8 @@ def judge_responses(
                     record_output(idx, future.result())
                 except Exception as exc:
                     record_error(idx, response, exc)
+        finally:
+            # Leaving on an error without cancel_futures would judge, then discard, every queued response.
+            executor.shutdown(cancel_futures=True)
 
     return [output for output in outputs if output is not None]

@@ -5,6 +5,7 @@ import os
 import re
 from typing import Any, Protocol
 
+from sypr.data.generate import call_with_retries
 from sypr.schemas import ModelResponse
 
 
@@ -1044,13 +1045,16 @@ class LiteLLMJudgeClient:
         if self.request_timeout is not None:
             kwargs["timeout"] = self.request_timeout
 
-        response = litellm.completion(**kwargs)
-        content = response.choices[0].message.content or ""
-        text, reasoning = self._split_thinking(content)
-        result = extract_json_object(text)
-        if reasoning:
-            result["reasoning_content"] = reasoning
-        return result
+        def chat_json() -> dict[str, Any]:
+            response = litellm.completion(**kwargs)
+            content = response.choices[0].message.content or ""
+            text, reasoning = self._split_thinking(content)
+            result = extract_json_object(text)
+            if reasoning:
+                result["reasoning_content"] = reasoning
+            return result
+
+        return call_with_retries(chat_json)
 
     def judge_once(self, response: ModelResponse) -> dict[str, Any]:
         if self.judge_setup_name == "sentence_joint_exemplar":

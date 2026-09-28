@@ -370,7 +370,7 @@ def judge_cmd(
     azure_base_url: str | None = typer.Option(None, help="Azure endpoint or LiteLLM api_base (e.g. http://localhost:8000 for vLLM)"),
     overwrite_existing: bool = typer.Option(False),
     max_workers: int = typer.Option(1),
-    request_timeout: float | None = typer.Option(60.0),
+    request_timeout: float | None = typer.Option(None, help="Seconds per judge request (default: the judge YAML's request_timeout, else 60)"),
     max_examples: int | None = typer.Option(None),
     error_output_path: str | None = typer.Option(None),
     stop_on_error: bool = typer.Option(True),
