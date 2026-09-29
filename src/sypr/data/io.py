@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os
 from pathlib import Path
 from typing import Iterable
 
@@ -32,6 +33,9 @@ def read_jsonl(path: str | Path) -> list[dict]:
 
 def write_jsonl(path: str | Path, rows: Iterable[dict]) -> None:
     ensure_parent_dir(path)
-    with open(path, "w", encoding="utf-8") as f:
+    # Not tempfile: its 0600 mode would carry over to path on os.replace.
+    tmp_path = f"{path}.tmp"
+    with open(tmp_path, "w", encoding="utf-8") as f:
         for row in rows:
             f.write(json.dumps(row, ensure_ascii=False) + "\n")
+    os.replace(tmp_path, path)
